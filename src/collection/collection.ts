@@ -1,5 +1,5 @@
 import { Bson } from "../../deps.ts";
-import { MongoDriverError } from "../error.ts";
+import { MongoDriverError, MongoInvalidArgumentError } from "../error.ts";
 import { WireProtocol } from "../protocol/mod.ts";
 import {
   AggregateOptions,
@@ -21,7 +21,7 @@ import {
 } from "../types.ts";
 import { AggregateCursor } from "./commands/aggregate.ts";
 import { FindCursor } from "./commands/find.ts";
-import { ListIndexesCursor } from "./commands/listIndexes.ts";
+import { ListIndexesCursor } from "./commands/list_indexes.ts";
 import { update } from "./commands/update.ts";
 
 export class Collection<T> {
@@ -46,12 +46,12 @@ export class Collection<T> {
     });
   }
 
-  async findOne(
+  findOne(
     filter?: Filter<T>,
     options?: FindOptions,
   ): Promise<T | undefined> {
     const cursor = this.find(filter, options);
-    return await cursor.next();
+    return cursor.next();
   }
 
   /**
@@ -208,22 +208,60 @@ export class Collection<T> {
       multi: false,
     });
     return {
-      upsertedId: upsertedIds ? upsertedIds[0] : undefined,
+      upsertedId: upsertedIds?.[0],
       upsertedCount,
       matchedCount,
       modifiedCount,
     };
   }
 
-  async updateMany(
+  updateMany(
     filter: Filter<T>,
     doc: UpdateFilter<T>,
     options?: UpdateOptions,
   ) {
-    return await update(this.#protocol, this.#dbName, this.name, filter, doc, {
+    if (!hasAtomicOperators(doc)) {
+      throw new MongoInvalidArgumentError(
+        "Update document requires atomic operators",
+      );
+    }
+
+    return update(this.#protocol, this.#dbName, this.name, filter, doc, {
       ...options,
       multi: options?.multi ?? true,
     });
+  }
+
+  async replaceOne(
+    filter: Filter<T>,
+    replacement: InsertDocument<T>,
+    options?: UpdateOptions,
+  ) {
+    if (hasAtomicOperators(replacement)) {
+      throw new MongoInvalidArgumentError(
+        "Replacement document must not contain atomic operators",
+      );
+    }
+
+    const { upsertedIds = [], upsertedCount, matchedCount, modifiedCount } =
+      await update(
+        this.#protocol,
+        this.#dbName,
+        this.name,
+        filter,
+        replacement,
+        {
+          ...options,
+          multi: false,
+        },
+      );
+
+    return {
+      upsertedId: upsertedIds?.[0],
+      upsertedCount,
+      matchedCount,
+      modifiedCount,
+    };
   }
 
   async deleteMany(
@@ -323,4 +361,17 @@ export class Collection<T> {
       collectionName: this.name,
     });
   }
+}
+
+export function hasAtomicOperators(doc: Bson.Document | Bson.Document[]) {
+  if (Array.isArray(doc)) {
+    for (const document of doc) {
+      if (hasAtomicOperators(document)) {
+        return true;
+      }
+    }
+    return false;
+  }
+  const keys = Object.keys(doc);
+  return keys.length > 0 && keys[0][0] === "$";
 }

@@ -1,3 +1,4 @@
+import { MongoInvalidArgumentError } from "../../src/error.ts";
 import { testWithClient } from "../common.ts";
 import { assert, assertEquals, assertThrowsAsync } from "../test.deps.ts";
 
@@ -47,9 +48,11 @@ export default function curdTests() {
     const { upsertedId } = await users.updateOne(
       { _id: "aaaaaaaaaaaaaaaaaaaaaaaa" },
       {
-        username: "user1",
-        password: "pass1",
-        date: new Date(dateNow),
+        $set: {
+          username: "user1",
+          password: "pass1",
+          date: new Date(dateNow),
+        },
       },
       { upsert: true },
     );
@@ -170,7 +173,7 @@ export default function curdTests() {
   testWithClient("testUpdateOne", async (client) => {
     const db = client.database("test");
     const users = db.collection<IUser>("mongo_test_users");
-    const result = await users.updateOne({}, { username: "USER1" });
+    const result = await users.updateOne({}, { $set: { username: "USER1" } });
     assertEquals(result, {
       matchedCount: 1,
       modifiedCount: 1,
@@ -179,17 +182,43 @@ export default function curdTests() {
     });
   });
 
+  testWithClient("testUpdateOne Error", async (client) => { // TODO: move tesr errors to a new file
+    const db = client.database("test");
+    const users = db.collection<IUser>("mongo_test_users");
+    try {
+      await users.updateOne({}, { username: "USER1" });
+      assert(false);
+    } catch (e) {
+      assert(e instanceof MongoInvalidArgumentError);
+    }
+  });
+
   testWithClient("testUpdateOneWithUpsert", async (client) => {
     const db = client.database("test");
     const users = db.collection<IUser>("mongo_test_users");
     const result = await users.updateOne(
       { username: "user2" },
-      { username: "USER2" },
+      { $set: { username: "USER2" } },
       { upsert: true },
     );
     assertEquals(result.matchedCount, 1);
     assertEquals(result.modifiedCount, 0);
     assertEquals(result.upsertedCount, 1);
+  });
+
+  testWithClient("testReplaceOne", async (client) => {
+    const db = client.database("test");
+    const users = db.collection<IUser>("mongo_test_users");
+    const result = await users.replaceOne({ username: "USER2" }, {
+      username: "USER3",
+    });
+
+    assertEquals(result, {
+      matchedCount: 1,
+      modifiedCount: 1,
+      upsertedCount: 0,
+      upsertedId: undefined,
+    });
   });
 
   testWithClient("testDeleteOne", async (client) => {
@@ -303,7 +332,7 @@ export default function curdTests() {
     const db = client.database("test");
     const users = db.collection<IUser>("mongo_test_users");
     const user1 = await users.distinct("username");
-    assertEquals(user1, ["USER2", "user1"]);
+    assertEquals(user1, ["USER3", "user1"]);
   });
 
   testWithClient("testDropConnection", async (client) => {
